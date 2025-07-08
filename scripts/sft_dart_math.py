@@ -26,7 +26,7 @@ LEARNING_RATE  = 5e-5
 SAVE_EVERY     = 500            # optimiser steps
 MODEL_NAME     = "Qwen/Qwen2.5-Math-1.5B"
 DATA_DIR       = "data/dart_math/train/*.jsonl"
-CKPT_DIR       = "checkpoints"
+CKPT_DIR       = "models"
 
 # ---------- helper to build the FSDP-wrapped model ----------
 def build_fsdp_model(rank: int):
@@ -68,12 +68,12 @@ def train_loop(rank: int, world_size: int, resume_from: Optional[str]):
                          shuffle=True, drop_last=True)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-    ckpt_mgr  = CheckpointManager(CKPT_DIR, model, optimizer)
+    checkpoint_manager  = CheckpointManager(CKPT_DIR, model, optimizer)
 
     # ── optional resume ────────────────────────────────────────────────────
     start_step = 0
     if resume_from is not None:
-        start_step = ckpt_mgr.load(resume_from, strict=False)
+        start_step = checkpoint_manager.load(resume_from, strict=False)
         print(f"[rank {rank}] Resumed at global step {start_step}")
 
     model.train()
@@ -94,7 +94,6 @@ def train_loop(rank: int, world_size: int, resume_from: Optional[str]):
                     gradient_accumulation_steps=1,
                 )
 
-            loss.backward()
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
@@ -103,17 +102,17 @@ def train_loop(rank: int, world_size: int, resume_from: Optional[str]):
 
             # -------- periodic async checkpoint (rank 0 schedules it) -------
             if rank == 0 and step % SAVE_EVERY == 0:
-                ckpt_mgr.save_async(step)
+                checkpoint_manager.save_async(step)
 
         # epoch-level sync save so all ranks see the same barrier
         dist.barrier()
         if rank == 0:
-            ckpt_mgr.save(step, tag=f"epoch_{epoch}")
+            checkpoint_manager.save(step, tag=f"epoch_{epoch}")
 
     # final checkpoint + consolidate
     dist.barrier()
     if rank == 0:
-        ckpt_mgr.save_final(step)
+        checkpoint_manager.save_final(step)
 
     dist.destroy_process_group()
 
@@ -124,7 +123,7 @@ def main():
                         help="Path to an existing checkpoint_step_xxx.pth")
     args = parser.parse_args()
 
-    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    world_size = int(os.environ.get("WORLD_SIZE", "4"))
     if world_size > 1:
         torch.multiprocessing.spawn(
             train_loop, args=(world_size, args.resume), nprocs=world_size
