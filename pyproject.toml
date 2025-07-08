@@ -21,6 +21,7 @@ dependencies = [
     "wandb>=0.19.8",
     "xopen>=2.0.2",
     "kaggle>=1.7.4.5",
+    "ipdb>=0.13.13",
 ]
 
 [tool.setuptools.packages.find]
