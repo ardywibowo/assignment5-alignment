@@ -153,9 +153,7 @@ def sft_microbatch_train_step(
 
     # sequence-level NLL averaged over sequences,
     # then scaled for grad-acc and any extra normalisation
-    loss = -sum_log_probs / (batch_size *
-                             gradient_accumulation_steps *
-                             normalize_constant)
+    loss = -sum_log_probs / (batch_size * gradient_accumulation_steps * normalize_constant)
 
     loss.backward()
 
