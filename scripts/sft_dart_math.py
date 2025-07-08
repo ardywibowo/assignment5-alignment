@@ -1,5 +1,8 @@
+import glob
+
 import torch
 import transformers
+from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 BATCH_SIZE = [128, 256, 512, 1024, 2048]
@@ -18,7 +21,8 @@ def main():
         device_map="auto",
     )
     
-    dataset = 
+    train_dataset = load_dataset("json", data_files=sorted(glob.glob("data/dart_math/train/*.jsonl")), split="train")
+    
     
     for _ in range(NUM_EPOCHS):
         pass
