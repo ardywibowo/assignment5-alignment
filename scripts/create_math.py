@@ -76,7 +76,7 @@ def main():
     validation_output = output_dir / "validation.jsonl"
     save_jsonl(test_problems, validation_output)
     
-    print(f"\nConversion complete!")
+    print("\nConversion complete!")
     print(f"Train: {len(train_problems)} problems -> {train_output}")
     print(f"Validation: {len(test_problems)} problems -> {validation_output}")
 

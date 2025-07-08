@@ -1,7 +1,6 @@
 import json
-import re
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Union, Any
 
 from math_verify import parse
 from vllm import LLM, SamplingParams
@@ -99,23 +98,78 @@ def evaluate_llm(
     vllm_model: LLM,
     reward_fn: Optional[Callable[[str, str], dict[str, float]]],
     prompts: list[str],
-    ground_truths: Optional[list[str]],
+    ground_truths: list[Any],
     eval_sampling_params: SamplingParams,
-) -> None:
+    output_path: Optional[str] = None,
+) -> dict:
+    """Evaluate LLM on prompts and calculate metrics.
+    
+    Args:
+        vllm_model: The VLLM model to evaluate
+        reward_fn: Function to calculate reward metrics
+        prompts: List of input prompts
+        ground_truths: List of ground truth answers
+        eval_sampling_params: Sampling parameters for generation
+        output_path: Optional path to save results
+        
+    Returns:
+        Dictionary containing evaluation results and aggregated metrics
+    """
     responses = vllm_model.generate(prompts, eval_sampling_params)
-    for prompt, response, ground_truth in zip(prompts, responses, ground_truths):
+    
+    results = []
+    all_metrics = []
+    
+    for i, (prompt, response, ground_truth) in enumerate(zip(prompts, responses, ground_truths)):
         response_text = response.outputs[0].text.strip()
         
+        # Calculate metrics if reward function provided
+        metrics = {}
         if reward_fn:
             metrics = reward_fn(response_text, ground_truth)
-            
-        print(f"Prompt: {prompt}")
+            all_metrics.append(metrics)
+        
+        # Store individual result
+        result = {
+            "id": i,
+            "prompt": prompt,
+            "response": response_text,
+            "ground_truth": ground_truth,
+            "metrics": metrics
+        }
+        results.append(result)
+        
+        # Print progress
+        print(f"Example {i+1}/{len(prompts)}")
         print(f"Response: {response_text}")
-        
-        if reward_fn:
+        if metrics:
             print(f"Metrics: {metrics}")
-        
         print("-" * 80)
+    
+    # Calculate aggregated metrics
+    aggregated_metrics = {}
+    if all_metrics:
+        metric_keys = all_metrics[0].keys()
+        for key in metric_keys:
+            values = [m[key] for m in all_metrics if key in m]
+            if values:
+                aggregated_metrics[f"avg_{key}"] = sum(values) / len(values)
+                aggregated_metrics[f"total_{key}"] = sum(values)
+    
+    # Prepare final results
+    eval_results = {
+        "examples": results,
+        "aggregated_metrics": aggregated_metrics,
+        "num_examples": len(results)
+    }
+    
+    # Save to disk if path provided
+    if output_path:
+        with open(output_path, 'w') as f:
+            json.dump(eval_results, f, indent=2)
+        print(f"Results saved to {output_path}")
+    
+    return eval_results
 
 if __name__ == "__main__":
     # Load MATH validation data
@@ -153,4 +207,14 @@ if __name__ == "__main__":
         include_stop_str_in_output = True,
     )
 
-    evaluate_llm(vllm_model, r1_zero_reward_fn, sample_prompts, sample_answers, sampling_params)
+    results = evaluate_llm(
+        vllm_model, 
+        r1_zero_reward_fn, 
+        sample_prompts, 
+        sample_answers, 
+        sampling_params,
+        output_path="eval_results.json"
+    )
+    
+    print("\nEvaluation completed!")
+    print(f"Aggregated metrics: {results['aggregated_metrics']}")
