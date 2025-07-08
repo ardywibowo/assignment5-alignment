@@ -105,18 +105,19 @@ class CheckpointManager:
         ckpt_path = self._make_path(step, tag)
         self._wait_for_previous_future()
 
-        future = dcp.async_save({"app_state": AppState(self.model,
-                                                    self.optimizer,
-                                                    self.scheduler,
-                                                    step)},
-                                checkpoint_id=ckpt_path,
-                                process_group=self.async_pg)
+        future = dcp.async_save(
+            {"app_state": AppState(self.model, self.optimizer, self.scheduler, step)},
+            checkpoint_id=ckpt_path,
+            process_group=self.async_pg,
+        )
 
         if self._is_primary():
             out_name = f"model_step_{step}.pt" if tag is None else f"{tag}.pt"
+
             def _after(_):
                 self._consolidate_to_weights_only(ckpt_path, self.dir / out_name)
                 print(f"[CheckpointManager] Consolidated → {out_name}")
+
             future = future.then(_after)
 
         self._inflight_future = future
@@ -124,17 +125,15 @@ class CheckpointManager:
             print(f"[CheckpointManager] async_save → {ckpt_path} (step {step})")
         return future
 
-
     def save(self, step: int, tag: str | None = None) -> str:
         ckpt_path = self._make_path(step, tag)
         self._wait_for_previous_future()
 
-        dcp.save({"app_state": AppState(self.model,
-                                        self.optimizer,
-                                        self.scheduler,
-                                        step)},
-                checkpoint_id=ckpt_path,
-                process_group=self.async_pg)
+        dcp.save(
+            {"app_state": AppState(self.model, self.optimizer, self.scheduler, step)},
+            checkpoint_id=ckpt_path,
+            process_group=self.async_pg,
+        )
 
         if self._is_primary():
             out_name = f"model_step_{step}.pt" if tag is None else f"{tag}.pt"
@@ -206,7 +205,6 @@ class CheckpointManager:
         torch.save(full["app_state"]["model"], out_path)
 
         tmp_path.unlink(missing_ok=True)
-
 
     def _wait_for_previous_future(self):
         if self._inflight_future is not None:

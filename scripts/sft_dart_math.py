@@ -20,13 +20,14 @@ from cs336_alignment.sft import (
 )
 
 # ---------- hyper-params ----------
-BATCH_SIZE     = 128
-NUM_EPOCHS     = 3
-LEARNING_RATE  = 5e-5
-SAVE_EVERY     = 500            # optimiser steps
-MODEL_NAME     = "Qwen/Qwen2.5-Math-1.5B"
-DATA_DIR       = "data/dart_math/train/*.jsonl"
-CKPT_DIR       = "models"
+BATCH_SIZE = 128
+NUM_EPOCHS = 3
+LEARNING_RATE = 5e-5
+SAVE_EVERY = 500  # optimiser steps
+MODEL_NAME = "Qwen/Qwen2.5-Math-1.5B"
+DATA_DIR = "data/dart_math/train/*.jsonl"
+CKPT_DIR = "models"
+
 
 # ---------- helper to build the FSDP-wrapped model ----------
 def build_fsdp_model(rank: int):
@@ -39,8 +40,8 @@ def build_fsdp_model(rank: int):
 
     base_model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
-        torch_dtype=torch.bfloat16,          # loaded in BF16 to skip an extra cast
-        device_map={"": rank},               # put weights on *this* GPU
+        torch_dtype=torch.bfloat16,  # loaded in BF16 to skip an extra cast
+        device_map={"": rank},  # put weights on *this* GPU
     )
 
     wrap_policy = transformer_auto_wrap_policy(base_model)
@@ -53,6 +54,7 @@ def build_fsdp_model(rank: int):
     )
     return fsdp_model
 
+
 # ---------- the training step ----------
 def train_loop(rank: int, world_size: int, resume_from: Optional[str]):
     """One process per GPU."""
@@ -61,14 +63,20 @@ def train_loop(rank: int, world_size: int, resume_from: Optional[str]):
 
     model = build_fsdp_model(rank)
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=True)
-    dataset = load_dataset("json",
-                           data_files=sorted(glob.glob(DATA_DIR)),
-                           split="train")
-    loader  = DataLoader(dataset, batch_size=BATCH_SIZE,
-                         shuffle=True, drop_last=True)
+    dataset = load_dataset(
+        "json",
+        data_files=sorted(glob.glob(DATA_DIR)),
+        split="train",
+    )
+    loader = DataLoader(
+        dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        drop_last=True,
+    )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-    checkpoint_manager  = CheckpointManager(CKPT_DIR, model, optimizer)
+    checkpoint_manager = CheckpointManager(CKPT_DIR, model, optimizer)
 
     # ── optional resume ────────────────────────────────────────────────────
     start_step = 0
@@ -116,11 +124,16 @@ def train_loop(rank: int, world_size: int, resume_from: Optional[str]):
 
     dist.destroy_process_group()
 
+
 # ---------- entry-point ----------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--resume", type=str, default=None,
-                        help="Path to an existing checkpoint_step_xxx.pth")
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to an existing checkpoint_step_xxx.pth",
+    )
     args = parser.parse_args()
 
     world_size = int(os.environ.get("WORLD_SIZE", "4"))
@@ -130,6 +143,7 @@ def main():
         )
     else:
         train_loop(0, 1, args.resume)
+
 
 if __name__ == "__main__":
     main()
