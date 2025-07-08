@@ -49,7 +49,7 @@ def main():
         prompts,
         answers,
         sampling_params,
-        output_path="eval_results.json",
+        output_path="artifacts/eval_results.json",
     )
 
     print("\nEvaluation completed!")
