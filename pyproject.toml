@@ -20,6 +20,7 @@ dependencies = [
     "vllm==0.7.2",
     "wandb>=0.19.8",
     "xopen>=2.0.2",
+    "kaggle>=1.7.4.5",
 ]
 
 [tool.setuptools.packages.find]
