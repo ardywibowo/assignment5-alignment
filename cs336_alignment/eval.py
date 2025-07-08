@@ -1,7 +1,12 @@
 import json
+import re
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
+
+from math_verify import parse
 from vllm import LLM, SamplingParams
+
+from cs336_alignment.drgrpo_grader import r1_zero_reward_fn, extract_answer
 
 
 def load_math_validation_data(data_path: str | Path = "data/MATH/validation.jsonl") -> list[dict]:
@@ -65,18 +70,44 @@ def format_math_problems(problems: list[dict], template: str) -> list[str]:
     return prompts
 
 
+def extract_answers_from_problems(problems: list[dict]) -> list[Union[str, list]]:
+    """Extract ground truth answers from MATH problems.
+    
+    Args:
+        problems: List of MATH problem dictionaries
+        
+    Returns:
+        List of extracted answers
+    """
+    answers = []
+    for problem in problems:
+        answer = extract_answer(problem['solution'])
+        answer = parse(answer)
+        answer = normalize_answer(answer)
+        
+        answers.append(answer)
+    
+    return answers
+
+def normalize_answer(answer: Union[str, list]) -> Union[str, list]:
+    if isinstance(answer, list):
+        return [normalize_answer(a) for a in answer]
+    else:
+        return str(answer)
+
 def evaluate_llm(
     vllm_model: LLM,
     reward_fn: Optional[Callable[[str, str], dict[str, float]]],
     prompts: list[str],
+    ground_truths: Optional[list[str]],
     eval_sampling_params: SamplingParams,
 ) -> None:
     responses = vllm_model.generate(prompts, eval_sampling_params)
-    for prompt, response in zip(prompts, responses):
+    for prompt, response, ground_truth in zip(prompts, responses, ground_truths):
         response_text = response.outputs[0].text.strip()
         
         if reward_fn:
-            metrics = reward_fn(prompt, response_text)
+            metrics = reward_fn(response_text, ground_truth)
             
         print(f"Prompt: {prompt}")
         print(f"Response: {response_text}")
@@ -96,15 +127,22 @@ if __name__ == "__main__":
     # Format problems with template
     prompts = format_math_problems(problems, template)
     
-    import ipdb
-    ipdb.set_trace()
+    # Extract ground truth answers
+    answers = extract_answers_from_problems(problems)
+
+    # import ipdb
+    # ipdb.set_trace()
+    
+    # Example: evaluate on first 5 problems
+    sample_prompts = prompts[:5]
+    sample_answers = answers[:5]
     
     # Initialize model
     vllm_model = LLM(model="Qwen/Qwen2.5-Math-1.5B")
     
-    # Example: evaluate on first 5 problems
-    sample_prompts = prompts[:5]
     print(f"Sample prompt:\n{sample_prompts[0]}")
+    print("-" * 40)
+    print(f"Ground truth answer: {sample_answers[0]}")
     print("-" * 80)
     
     sampling_params = SamplingParams(
@@ -114,3 +152,5 @@ if __name__ == "__main__":
         stop = "</answer>",
         include_stop_str_in_output = True,
     )
+
+    evaluate_llm(vllm_model, r1_zero_reward_fn, sample_prompts, sample_answers, sampling_params)
