@@ -34,12 +34,12 @@ from cs336_alignment.sft import (
 # ──────────────────────────────────────────────────────────────────────────
 BATCH_SIZE = 4
 NUM_EPOCHS = 3
-LEARNING_RATE = 1e-5
+LEARNING_RATE = 1e-6
 SAVE_EVERY = 1000  # optimiser steps
 MODEL_NAME = "Qwen/Qwen2.5-Math-1.5B"
 DATA_DIR = "data/dart_math/train/*.jsonl"
 CKPT_DIR = "models"
-WARMUP_STEPS = 10  # LR warm‑up steps
+WARMUP_STEPS = 1000  # LR warm‑up steps
 
 
 # ══════════════════════════════════════════════════════════════════════════
