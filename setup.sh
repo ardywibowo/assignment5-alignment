@@ -130,17 +130,17 @@ fi
 # Install Claude Code
 echo "🤖 Installing Claude Code..."
 
-if command_exists claude-code; then
+if command_exists claude; then
     echo "✅ Claude Code is already installed"
-    echo "Claude Code version: $(claude-code --version)"
+    echo "Claude Code version: $(claude --version)"
 else
     echo "📥 Installing Claude Code via npm..."
     npm install -g @anthropic-ai/claude-code
     
     # Verify installation
-    if command_exists claude-code; then
+    if command_exists claude; then
         echo "✅ Claude Code successfully installed"
-        echo "Claude Code version: $(claude-code --version)"
+        echo "Claude Code version: $(claude --version)"
     else
         echo "❌ Claude Code installation failed"
         echo "💡 Try running: npm install -g @anthropic-ai/claude-code"
@@ -151,12 +151,3 @@ fi
 echo ""
 echo "🎉 Installation complete!"
 echo ""
-echo "📋 Next steps:"
-echo "1. Set up your Anthropic API key:"
-echo "   export ANTHROPIC_API_KEY='your-api-key-here'"
-echo "   (Add this to your ~/.bashrc or ~/.zshrc for persistence)"
-echo ""
-echo "2. Start using Claude Code:"
-echo "   claude-code --help"
-echo ""
-echo "📚 For more information about Claude Code, visit Anthropic's blog"
