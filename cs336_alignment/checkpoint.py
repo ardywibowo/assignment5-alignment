@@ -2,7 +2,7 @@ import os
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import torch
 import torch.distributed as dist
@@ -20,8 +20,11 @@ from torch.distributed.checkpoint.stateful import Stateful
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#                               Checkpointing
+# ══════════════════════════════════════════════════════════════════════════
 class AppState(Stateful):
-    """Container that Torch-DCP can traverse."""
+    """Container that Torch‑DCP can traverse."""
 
     def __init__(
         self,
@@ -36,6 +39,7 @@ class AppState(Stateful):
         self.scheduler = scheduler
         self.steps = steps
 
+    # ---- Stateful hooks --------------------------------------------------
     def state_dict(self):
         model_sd = (
             get_state_dict(self.model, self.optimizer)[0]
@@ -51,7 +55,7 @@ class AppState(Stateful):
         return sd
 
     def load_state_dict(self, state_dict):
-        opts = StateDictOptions(strict=False)  # loose load
+        opts = StateDictOptions(strict=False)
         set_model_state_dict(self.model, state_dict["model"], options=opts)
 
         if self.scheduler is not None and "scheduler" in state_dict:
@@ -65,13 +69,13 @@ class AppState(Stateful):
         self.steps = state_dict.get("steps", 0)
 
 
+# -------------------------------------------------------------------------
 class CheckpointManager:
     """
-    Thin wrapper around Torch-DCP.
+    Thin wrapper around Torch‑DCP.
 
-    * Handles async CPU process-group creation
-    * Works in multi-GPU and single-process modes
-    * Stores model / optimiser / scheduler + `global_step`
+    * All ranks enter every save / async_save call → no collective hangs.
+    * Handles both C++ (`.then`) and Python (`.add_done_callback`) futures.
     """
 
     _cpu_pg: Optional[dist.ProcessGroup] = None  # shared singleton
@@ -82,8 +86,6 @@ class CheckpointManager:
         model: FSDP,
         optimizer: Optional[torch.optim.Optimizer] = None,
         scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
-        *,
-        async_pg: Optional[dist.ProcessGroup] = None,
     ):
         self.dir = Path(dir).expanduser().resolve()
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -92,15 +94,15 @@ class CheckpointManager:
         self.optimizer = optimizer
         self.scheduler = scheduler
 
-        if async_pg is not None:
-            self.async_pg = async_pg
-        elif dist.is_initialized() and dist.get_world_size() > 1:
+        # extra CPU process‑group for async I/O if running distributed
+        if dist.is_initialized() and dist.get_world_size() > 1:
             self.async_pg = self._get_or_create_cpu_pg()
         else:
             self.async_pg = None
 
         self._inflight_future: Optional[Any] = None
 
+    # ── public helpers ────────────────────────────────────────────────────
     def save_async(self, step: int, tag: str | None = None):
         ckpt_path = self._make_path(step, tag)
         self._wait_for_previous_future()
@@ -114,11 +116,11 @@ class CheckpointManager:
         if self._is_primary():
             out_name = f"model_step_{step}.pt" if tag is None else f"{tag}.pt"
 
-            def _after(_):
+            def _after():
                 self._consolidate_to_weights_only(ckpt_path, self.dir / out_name)
                 print(f"[CheckpointManager] Consolidated → {out_name}")
 
-            future = future.then(_after)
+            self._chain_future(future, _after)
 
         self._inflight_future = future
         if self._is_primary():
@@ -138,13 +140,11 @@ class CheckpointManager:
         if self._is_primary():
             out_name = f"model_step_{step}.pt" if tag is None else f"{tag}.pt"
             self._consolidate_to_weights_only(ckpt_path, self.dir / out_name)
-
-        if self._is_primary():
             print(f"[CheckpointManager] Saved {ckpt_path} (step {step})")
+
         return ckpt_path
 
     def save_final(self, step: int) -> str:
-        """Shortcut that writes `final_model.pth` synchronously."""
         return self.save(step, tag="final_model")
 
     def load(
@@ -154,19 +154,14 @@ class CheckpointManager:
         strict: bool = True,
         weights_only: bool = False,
     ) -> int:
-        """
-        Restore a checkpoint produced by `save` / `save_async`.
-
-        Returns the stored `global_step`.
-        """
+        """Restore checkpoint; returns stored `global_step`."""
         app_state = (
             AppState(self.model)
             if weights_only
             else AppState(self.model, self.optimizer, self.scheduler)
         )
-
         if not path:
-            return app_state.steps  # nothing to load
+            return app_state.steps
 
         path = str(Path(path).expanduser().resolve())
         planner = DefaultLoadPlanner(allow_partial_load=not strict)
@@ -180,7 +175,7 @@ class CheckpointManager:
 
         if self._is_primary():
             who = (
-                " (model-only)"
+                " (model‑only)"
                 if weights_only or self.optimizer is None
                 else " w/ optimiser & sched."
             )
@@ -188,49 +183,58 @@ class CheckpointManager:
             print(
                 f"[CheckpointManager] Restored {path} at step {app_state.steps}{who} ({mode})"
             )
-
         return app_state.steps
 
+    # ── internals ─────────────────────────────────────────────────────────
     def _consolidate_to_weights_only(self, ckpt_path: str, out_path: str):
-        """
-        Convert the Torch-DCP checkpoint shards at `ckpt_path`
-        into a single .pt that holds **just** the model's state_dict.
-        """
-        # 1. Collapse the shards → a temporary .pt file
+        """Collapse shards → tmp.pt → strip optimiser/sched → final .pt"""
         tmp_path = Path(tempfile.gettempdir()) / f"{uuid.uuid4().hex}.pt"
         dcp_to_torch_save(ckpt_path, tmp_path)
 
-        # 2. Strip everything except the model weights
         full = torch.load(tmp_path, map_location="cpu")
         torch.save(full["app_state"]["model"], out_path)
-
         tmp_path.unlink(missing_ok=True)
+
+    # ---- future utilities ------------------------------------------------
+    def _chain_future(self, fut: Any, cb: Callable[[], None]):
+        """
+        Attach `cb` to `fut`, supporting both torch._C.Future (`then`)
+        and concurrent.futures.Future (`add_done_callback`).
+        """
+        if hasattr(fut, "then"):
+            fut.then(lambda _: cb())
+        elif hasattr(fut, "add_done_callback"):
+            fut.add_done_callback(lambda _f: cb())
+        else:  # last‑resort: block synchronously
+            fut.wait() if hasattr(fut, "wait") else fut.result()
+            cb()
 
     def _wait_for_previous_future(self):
         if self._inflight_future is not None:
-            self._inflight_future.result()
+            if hasattr(self._inflight_future, "wait"):
+                self._inflight_future.wait()
+            else:
+                self._inflight_future.result()
             self._inflight_future = None
 
+    # ---- misc helpers ----------------------------------------------------
     def _make_path(self, step: int, tag: Optional[str]) -> str:
         filename = f"{tag or f'checkpoint_step_{step}'}"
         if not filename.endswith(".pth"):
             filename += ".pth"
         return str(self.dir / filename)
 
-    def _is_primary(self):
+    def _is_primary(self) -> bool:
         return not dist.is_initialized() or dist.get_rank() == 0
 
+    # ---- singleton CPU group -------------------------------------------
     @classmethod
     def _get_or_create_cpu_pg(cls):
         if cls._cpu_pg is None:
-            if not dist.is_initialized():
-                raise RuntimeError(
-                    "Distributed not initialised; call dist.init_process_group() "
-                    "or pass an explicit process_group."
-                )
             cls._cpu_pg = dist.new_group(backend="gloo")
         return cls._cpu_pg
 
+    # ---- destructor -----------------------------------------------------
     def __del__(self):
         try:
             self._wait_for_previous_future()
